@@ -1,0 +1,7 @@
+*.bazel
+*.bazel.*
+/bazel-bin
+/bazel-kb-search
+/bazel-out
+/bazel-testlogs
+/.idea
