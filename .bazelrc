@@ -1,1 +1,11 @@
 build --action_env=BAZEL_CXXOPTS="-std=c++20"
+build --compilation_mode="opt"
+
+common --enable_bzlmod
+
+# Bazel's default registry
+# common --registry=https://bcr.bazel.build
+# Our internal Registry
+# common --registry=https://raw.githubusercontent.com/happymonkey1/kb-bazel-registry/main
+common --registry="file:///home/happymonkey1/dev/kb-bazel-registry"
+

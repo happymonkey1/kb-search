@@ -8,7 +8,9 @@ cc_library(
     # strip_include_prefix = "include",
     visibility = ["//visibility:public"],
     deps = [
-        "@spdlog"
+        "@spdlog",
+        "@tinyxml2",
+        "@tidy-html5",
     ],
 )
 

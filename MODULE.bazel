@@ -1,3 +1,6 @@
 module(name = "kb-search", version = "1.0")
 
+bazel_dep(name = "rules_cc", version = "0.0.9")
 bazel_dep(name = "spdlog", version = "1.13.0")
+bazel_dep(name = "tinyxml2", version = "10.0.0")
+bazel_dep(name = "tidy-html5", version = "5.8.0")
