@@ -29,7 +29,10 @@ public:
     auto stop() noexcept -> void { m_running = false; }
 private:
     auto crawl_directory(const std::filesystem::path& p_current_root) noexcept -> void;
-    [[nodiscard]] auto index_file(const std::filesystem::path& p_file_path) const noexcept -> option<document>;
+    [[nodiscard]] auto index_file(
+        const std::filesystem::path& p_file_path,
+        document_type_t p_doc_type
+    ) const noexcept -> option<document>;
 private:
     crawler_create_specification m_specification{};
     bool m_running = false;

@@ -51,7 +51,10 @@ auto local_crawler::crawl_directory(const std::filesystem::path& p_current_root)
             continue;
         } else if (dir_entry.is_regular_file()) {
             // skip parsing if not implemented
-            if (!is_document_parsing_implemented(dir_entry)) {
+            const auto ext = dir_entry.path().extension();
+            const auto ext_view = std::string_view{ ext.c_str() };
+            const auto doc_type = document_extension_str_to_type(ext_view);
+            if (!is_document_parsing_implemented(doc_type)) {
                 continue;
             }
 
@@ -60,14 +63,14 @@ auto local_crawler::crawl_directory(const std::filesystem::path& p_current_root)
                 return;
             }
 
-            KB_CORE_TRACE("[local_crawler]: Indexing '{}'", dir_entry.path().c_str());
-            const auto indexed_file = index_file(dir_entry);
+            //KB_CORE_TRACE("[local_crawler]: Indexing '{}'", dir_entry.path().c_str());
+            const auto indexed_file = index_file(dir_entry, doc_type);
             if (!indexed_file) {
                 ++m_error_count;
                 continue;
             }
 
-            KB_CORE_TRACE("[local_crawler]:   Indexed content '{}'", indexed_file->m_content);
+            //KB_CORE_TRACE("[local_crawler]:   Indexed content '{}'", indexed_file->m_content);
             ++m_index_count;
         } else {
             KB_CORE_WARN("[local_crawler]: Found unhandled dir entry {}", dir_entry.path().c_str())
@@ -75,8 +78,11 @@ auto local_crawler::crawl_directory(const std::filesystem::path& p_current_root)
     }
 }
 
-auto local_crawler::index_file(const std::filesystem::path &p_file_path) const noexcept -> option<document> {
-    const auto indexed_file = document::create(p_file_path);
+auto local_crawler::index_file(
+    const std::filesystem::path &p_file_path,
+    document_type_t p_doc_type
+) const noexcept -> option<document> {
+    const auto indexed_file = document::create(p_file_path, p_doc_type);
     if (!indexed_file) {
         KB_CORE_WARN("[local_crawler]: Failed to index file '{}'", p_file_path.c_str())
         return indexed_file;

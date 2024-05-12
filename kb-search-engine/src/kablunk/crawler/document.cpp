@@ -17,15 +17,13 @@ namespace kb {
 
 // convert html to xhtml, hopefully fixing errors, so we can parse the document
 auto convert_html_to_xhtml(
-    const std::filesystem::path& p_file_path,
-    std::string&& p_content_buffer
+    const std::string& p_content_buffer
 ) noexcept -> std::string {
-    TidyBuffer output{};
+    std::string content_output{};
+    TidyBuffer tidy_output{};
     TidyBuffer err_buf{};
-    int rc = -1;
 
     TidyDoc tidy_doc = tidyCreate();
-    KB_CORE_TRACE("[local_crawler]: Running tidy on '{}' to convert to xhtml", p_file_path.c_str())
 
     KB_VERIFY(tidyOptSetBool(tidy_doc, TidyXhtmlOut, yes))
     // TODO: does not work
@@ -58,7 +56,7 @@ auto convert_html_to_xhtml(
     //ok = tidyOptSetBool(tidy_doc, TidyMergeSpans, yes);
 
     // Capture diagnostics
-    rc = tidySetErrorBuffer(tidy_doc, &err_buf);
+    int rc = tidySetErrorBuffer(tidy_doc, &err_buf);
 
     if (rc >= 0) {
         // Parse the input
@@ -73,24 +71,19 @@ auto convert_html_to_xhtml(
         rc = tidyRunDiagnostics(tidy_doc);
     }
     if ( rc > 1 ) {
-        // If error, force output.
-        KB_CORE_ERROR("[document]: Tidy failed! Still forcing output")
+        // If error, force tidy_output.
+        KB_CORE_ERROR("[document]: Tidy failed! Still forcing tidy_output")
         KB_CORE_ERROR("[document]:   {}", std::string_view{ reinterpret_cast<char*>(err_buf.bp), err_buf.size })
         rc = (tidyOptSetBool(tidy_doc, TidyForceOutput, yes) ? rc : -1);
     }
     if (rc >= 0) {
         // Pretty Print
-        rc = tidySaveBuffer(tidy_doc, &output);
+        rc = tidySaveBuffer(tidy_doc, &tidy_output);
 
-        // Copy from output buffer back into the local crawler buffer
+        // Copy from tidy_output buffer back into the local crawler buffer
         if (rc >= 0) {
             KB_CORE_TRACE("[document]: Tidy succeeded.");
-            p_content_buffer.reserve(output.size);
-            std::memcpy(
-                static_cast<void*>(&p_content_buffer[0]),
-                static_cast<const void*>(output.bp),
-                static_cast<size_t>(output.size)
-            );
+            content_output = std::string{ reinterpret_cast<const char*>(tidy_output.bp), tidy_output.size };
         } else {
             KB_CORE_ERROR(
                 "[document]: Tidy failed! Error={}",
@@ -101,16 +94,16 @@ auto convert_html_to_xhtml(
         KB_CORE_ERROR("[document]: Tidy failed!");
     }
 
-    tidyBufFree(&output);
+    tidyBufFree(&tidy_output);
     tidyBufFree(&err_buf);
     tidyRelease(tidy_doc);
 
-    return p_content_buffer;
+    return content_output;
 }
 
-auto parse_xml(std::string&& p_content_buffer) noexcept -> option<std::string> {
-    tinyxml2::XMLDocument doc;
-    doc.Parse(p_content_buffer.c_str());
+auto parse_xml(const std::string& p_content_buffer) noexcept -> option<std::string> {
+    tinyxml2::XMLDocument doc{};
+    doc.Parse(p_content_buffer.c_str(), p_content_buffer.size());
 
     if (doc.Error()) {
         KB_CORE_ERROR("[document]: Tinyxml2 parsing error! {}", doc.ErrorStr());
@@ -158,13 +151,13 @@ auto parse_xml(std::string&& p_content_buffer) noexcept -> option<std::string> {
     return ss.str();
 }
 
-auto document::create(const std::filesystem::path& p_file_path) noexcept -> option<document> {
+auto document::create(
+    const std::filesystem::path& p_file_path,
+    document_type_t p_original_document_type
+) noexcept -> option<document> {
     if (!std::filesystem::exists(p_file_path)) {
         return std::nullopt;
     }
-
-    const auto ext_path = p_file_path.extension();
-    const auto ext = std::string_view{ ext_path.c_str() };
 
     std::ifstream file{ p_file_path, std::ios::in };
     KB_CORE_ASSERT(file, "[document]: Failed to open '{}'", p_file_path.c_str())
@@ -178,26 +171,36 @@ auto document::create(const std::filesystem::path& p_file_path) noexcept -> opti
         file.read(&buffer[0], static_cast<i64>(buffer.size()));
     }
 
-    if (ext == document_extension::k_xhtml || ext == document_extension::k_html) {
-        // convert html to xhtml before parsing
-        if (ext == document_extension::k_html) {
-            buffer = convert_html_to_xhtml(p_file_path, std::move(buffer));
-        }
+    switch (p_original_document_type) {
+        case document_type_t::html: {
+            buffer = convert_html_to_xhtml(buffer);
+        } [[fallthrough]];
+        case document_type_t::xhtml: {
+            if (buffer.empty()) {
+                KB_CORE_WARN("[document]: No data available?");
+                return std::nullopt;
+            }
 
-        const auto content = parse_xml(std::move(buffer));
-        if (!content) {
-            KB_CORE_ERROR("[document]:   Failed to parse '{}'!", p_file_path.c_str())
+            const auto content = parse_xml(buffer);
+            if (!content) {
+                KB_CORE_ERROR("[document]:   Failed to parse '{}'!", p_file_path.c_str())
+                return std::nullopt;
+            }
+
+            return document{
+                .m_type = p_original_document_type,
+                .m_content = *content,
+                .m_uri = p_file_path.string(),
+            };
+        }
+        case document_type_t::none: [[fallthrough]];
+        default: {
+            KB_CORE_WARN(
+                "[document]: Unhandled document type '{}'",
+                static_cast<std::underlying_type_t<document_type_t>>(p_original_document_type)
+            );
             return std::nullopt;
         }
-
-        return document{
-            .m_type = document_type_t::html,
-            .m_content = *content,
-            .m_uri = p_file_path.string(),
-        };
-    } else {
-        KB_CORE_WARN("[document]: Unhandled extension '{}'", ext);
-        return std::nullopt;
     }
 }
 } // end namespace kb

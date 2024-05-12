@@ -16,7 +16,7 @@ int main() {
     const std::filesystem::path directory = kb::core::get_home_path() / "docs/cppreference/20230810/reference";
 
     kb::timer crawl_timer{};
-    auto crawler = kb::local_crawler::create({ .m_root = directory, .m_max_index_count = 0 });
+    auto crawler = kb::local_crawler::create({ .m_root = directory, .m_max_index_count = 10 });
     crawler->start_crawling();
     KB_CORE_INFO("Crawling took {} ms", crawl_timer.get_elapsed_ms())
 
