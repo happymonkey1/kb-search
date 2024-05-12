@@ -2,7 +2,10 @@
 // Created by happymonkey1 on 5/10/24.
 //
 
-#include "kablunk/crawler/document.h"
+#include "kablunk/ingestion/document.h"
+#include "kablunk/core/owning_buffer.h"
+#include "kablunk/persistence/document_store_accessor.h"
+#include "kablunk/ingestion/xml_document.h"
 
 #include <tidy.h>
 #include <tidybuffio.h>
@@ -11,15 +14,19 @@
 #include <string_view>
 #include <fstream>
 #include <stack>
-#include <kablunk/crawler/xml_document.h>
+
+namespace {
+// initially allocate 4KB
+constexpr size_t k_initial_file_buffer_size = 4 * 1024;
+// statically allocated storage to try and minimize the amount of allocations / destructions
+// while reading files
+inline kb::owning_buffer<char> s_read_buffer{ k_initial_file_buffer_size };
+} // end anonymous namespace
 
 namespace kb {
 
 // convert html to xhtml, hopefully fixing errors, so we can parse the document
-auto convert_html_to_xhtml(
-    const std::string& p_content_buffer
-) noexcept -> std::string {
-    std::string content_output{};
+auto convert_html_to_xhtml() noexcept -> void {
     TidyBuffer tidy_output{};
     TidyBuffer err_buf{};
 
@@ -60,7 +67,7 @@ auto convert_html_to_xhtml(
 
     if (rc >= 0) {
         // Parse the input
-        rc = tidyParseString(tidy_doc, p_content_buffer.c_str());
+        rc = tidyParseString(tidy_doc, s_read_buffer.data());
     }
     if (rc >= 0) {
         // Tidy it up!
@@ -80,10 +87,10 @@ auto convert_html_to_xhtml(
         // Pretty Print
         rc = tidySaveBuffer(tidy_doc, &tidy_output);
 
-        // Copy from tidy_output buffer back into the local crawler buffer
+        // Copy from tidy_output buffer back into the local ingestion buffer
         if (rc >= 0) {
             KB_CORE_TRACE("[document]: Tidy succeeded.");
-            content_output = std::string{ reinterpret_cast<const char*>(tidy_output.bp), tidy_output.size };
+            s_read_buffer.copy_into(reinterpret_cast<const char*>(tidy_output.bp), tidy_output.size);
         } else {
             KB_CORE_ERROR(
                 "[document]: Tidy failed! Error={}",
@@ -97,13 +104,11 @@ auto convert_html_to_xhtml(
     tidyBufFree(&tidy_output);
     tidyBufFree(&err_buf);
     tidyRelease(tidy_doc);
-
-    return content_output;
 }
 
-auto parse_xml(const std::string& p_content_buffer) noexcept -> option<std::string> {
+auto parse_xml() noexcept -> option<std::string> {
     tinyxml2::XMLDocument doc{};
-    doc.Parse(p_content_buffer.c_str(), p_content_buffer.size());
+    doc.Parse(s_read_buffer.data(), s_read_buffer.size_in_bytes());
 
     if (doc.Error()) {
         KB_CORE_ERROR("[document]: Tinyxml2 parsing error! {}", doc.ErrorStr());
@@ -129,7 +134,7 @@ auto parse_xml(const std::string& p_content_buffer) noexcept -> option<std::stri
                 const auto text = cur->ToText()->Value();
                 if (text) {
                     ss << text;
-                    ss << "\t";
+                    ss << " ";
                 }
             }
 
@@ -153,7 +158,8 @@ auto parse_xml(const std::string& p_content_buffer) noexcept -> option<std::stri
 
 auto document::create(
     const std::filesystem::path& p_file_path,
-    document_type_t p_original_document_type
+    document_type_t p_original_document_type,
+    document_store_accessor &p_document_store_accessor
 ) noexcept -> option<document> {
     if (!std::filesystem::exists(p_file_path)) {
         return std::nullopt;
@@ -161,27 +167,31 @@ auto document::create(
 
     std::ifstream file{ p_file_path, std::ios::in };
     KB_CORE_ASSERT(file, "[document]: Failed to open '{}'", p_file_path.c_str())
-    std::string buffer{};
 
     // parse file by reading entire file content into memory
     {
         file.seekg(0, std::ios::end);
-        buffer.resize(file.tellg());
+        const auto file_size = file.tellg();
+        if (static_cast<u64>(file_size) + 1ull > s_read_buffer.allocated_size_in_bytes()) {
+            s_read_buffer.resize_discard_ok(static_cast<u64>(file_size) + 1ull);
+        }
         file.seekg(0, std::ios::beg);
-        file.read(&buffer[0], static_cast<i64>(buffer.size()));
+        s_read_buffer.zero();
+        file.read(s_read_buffer.data(), static_cast<i64>(file_size));
     }
 
+    std::string content_buffer{};
     switch (p_original_document_type) {
         case document_type_t::html: {
-            buffer = convert_html_to_xhtml(buffer);
+            convert_html_to_xhtml();
         } [[fallthrough]];
         case document_type_t::xhtml: {
-            if (buffer.empty()) {
+            if (s_read_buffer.empty()) {
                 KB_CORE_WARN("[document]: No data available?");
                 return std::nullopt;
             }
 
-            const auto content = parse_xml(buffer);
+            const auto content = parse_xml();
             if (!content) {
                 KB_CORE_ERROR("[document]:   Failed to parse '{}'!", p_file_path.c_str())
                 return std::nullopt;
@@ -202,5 +212,9 @@ auto document::create(
             return std::nullopt;
         }
     }
+}
+
+auto details::release_document_read_buffer() noexcept -> void {
+    s_read_buffer.release();
 }
 } // end namespace kb

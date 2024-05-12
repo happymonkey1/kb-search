@@ -2,23 +2,24 @@
 // Created by happymonkey1 on 5/10/24.
 //
 
-#include "kablunk/crawler/local_crawler.h"
+#include "kablunk/ingestion/local_crawler.h"
 #include "kablunk/core/core.h"
 
 namespace kb {
 
 local_crawler::local_crawler(crawler_create_specification p_specification) noexcept
-    : m_specification{ std::move(p_specification) } {
+    : m_root{ p_specification.m_root }, m_max_index_count{ p_specification.m_max_index_count },
+    m_document_store_accessor{ document_store_accessor::create(p_specification.m_document_store_ptr) } {
 }
 
-auto local_crawler::create(crawler_create_specification p_specification) noexcept -> std::unique_ptr<local_crawler> {
-    return std::make_unique<local_crawler>(std::move(p_specification));
+auto local_crawler::create(crawler_create_specification p_specification) noexcept -> local_crawler {
+    return local_crawler{ std::move(p_specification) };
 }
 
 auto local_crawler::start_crawling() noexcept -> void {
-    m_found_directories.emplace(m_specification.m_root);
+    m_found_directories.emplace(m_root);
 
-    KB_CORE_INFO("[local_crawler]: Starting crawl with root='{}'", m_specification.m_root.c_str())
+    KB_CORE_INFO("[local_crawler]: Starting crawl with root='{}'", m_root.c_str())
 
     m_running = true;
     while (m_running && !m_found_directories.empty()) {
@@ -29,13 +30,16 @@ auto local_crawler::start_crawling() noexcept -> void {
         m_found_directories.pop();
     }
 
-    KB_CORE_INFO("[local_crawler]: Finished crawl with root='{}'", m_specification.m_root.c_str())
+    KB_CORE_INFO("[local_crawler]: Finished crawl with root='{}'", m_root.c_str())
     KB_CORE_INFO(
         "[local_crawler]:   indexed {} files, {} errors ({} total files)",
         m_index_count,
         m_error_count,
         m_index_count + m_error_count
     );
+
+    // not explicitly required, but let's release the memory allocated by the internal document read buffer
+    details::release_document_read_buffer();
 }
 
 auto local_crawler::crawl_directory(const std::filesystem::path& p_current_root) noexcept -> void {
@@ -54,43 +58,29 @@ auto local_crawler::crawl_directory(const std::filesystem::path& p_current_root)
             const auto ext = dir_entry.path().extension();
             const auto ext_view = std::string_view{ ext.c_str() };
             const auto doc_type = document_extension_str_to_type(ext_view);
+
             if (!is_document_parsing_implemented(doc_type)) {
                 continue;
             }
 
-            if (m_specification.m_max_index_count != 0 && m_index_count >= m_specification.m_max_index_count) {
+            if (m_max_index_count != 0 && m_index_count >= m_max_index_count) {
                 m_running = false;
                 return;
             }
 
-            //KB_CORE_TRACE("[local_crawler]: Indexing '{}'", dir_entry.path().c_str());
-            const auto indexed_file = index_file(dir_entry, doc_type);
+            const auto indexed_file = document::create(dir_entry.path(), doc_type, m_document_store_accessor);
             if (!indexed_file) {
                 ++m_error_count;
                 continue;
             }
 
-            //KB_CORE_TRACE("[local_crawler]:   Indexed content '{}'", indexed_file->m_content);
+            m_document_store_accessor.put_document(indexed_file->m_uri, *indexed_file);
+
             ++m_index_count;
         } else {
             KB_CORE_WARN("[local_crawler]: Found unhandled dir entry {}", dir_entry.path().c_str())
         }
     }
-}
-
-auto local_crawler::index_file(
-    const std::filesystem::path &p_file_path,
-    document_type_t p_doc_type
-) const noexcept -> option<document> {
-    const auto indexed_file = document::create(p_file_path, p_doc_type);
-    if (!indexed_file) {
-        KB_CORE_WARN("[local_crawler]: Failed to index file '{}'", p_file_path.c_str())
-        return indexed_file;
-    }
-
-    // TODO: add to "db"
-
-    return indexed_file;
 }
 
 } // end namespace kb

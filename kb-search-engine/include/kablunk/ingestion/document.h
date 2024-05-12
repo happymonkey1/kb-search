@@ -11,6 +11,9 @@
 
 namespace kb {
 
+// forward declaration(s)
+class document_store_accessor;
+
 enum class document_type_t {
     none,
     html,
@@ -70,9 +73,14 @@ struct document
     // factory function to create a document from a path to a local file
     static auto create(
         const std::filesystem::path& p_file_path,
-        document_type_t p_original_document_type
+        document_type_t p_original_document_type,
+        document_store_accessor& p_document_store_accessor
     ) noexcept -> option<document>;
 };
+
+namespace details {
+auto release_document_read_buffer() noexcept -> void;
+} // end namespace ::details
 
 } // end namespace kb
 
